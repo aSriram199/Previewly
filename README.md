@@ -1,6 +1,6 @@
 # Previewly
 
-A web application for previewing and managing content.
+A web application for building applications by using Ai || similar to bolt.
 
 ## Project Structure
 
