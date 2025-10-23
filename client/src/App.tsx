@@ -1,21 +1,17 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import LandingPage from './pages/LandingPage';
-import Workspace from './pages/Workspace';
-import { PromptProvider } from './context/PromptContext';
+
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Home } from './pages/Home';
+import { Builder } from './pages/Builder';
+
 
 function App() {
   return (
-    <PromptProvider>
-      <BrowserRouter>
-        <div className="min-h-screen">
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/workspace" element={<Workspace />} />
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </div>
-      </BrowserRouter>
-    </PromptProvider>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/builder" element={<Builder />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
