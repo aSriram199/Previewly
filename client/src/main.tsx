@@ -2,7 +2,12 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { WebContainerProvider } from './context/WebContainerContext.tsx';
 
 createRoot(document.getElementById('root')!).render(
-  <App />
+  <StrictMode>
+    <WebContainerProvider>
+      <App />
+    </WebContainerProvider>
+  </StrictMode>
 );
