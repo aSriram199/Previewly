@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FolderTree, File, ChevronRight, ChevronDown } from 'lucide-react';
+import { Folder, FolderOpen, FileText, ChevronRight } from 'lucide-react';
 import { FileItem } from '../types';
 
 interface FileExplorerProps {
@@ -18,10 +18,8 @@ function FileNode({ item, depth, onFileClick }: FileNodeProps) {
 
   const handleClick = () => {
     if (item.type === 'folder') {
-      console.log('[FileExplorer] Toggle folder:', item.path, !isExpanded ? 'open' : 'close');
       setIsExpanded(!isExpanded);
     } else {
-      console.log('[FileExplorer] Select file:', item.path);
       onFileClick(item);
     }
   };
@@ -29,26 +27,44 @@ function FileNode({ item, depth, onFileClick }: FileNodeProps) {
   return (
     <div className="select-none">
       <div
-        className="flex items-center gap-2 p-2 hover:bg-gray-800 rounded-md cursor-pointer"
-        style={{ paddingLeft: `${depth * 1.5}rem` }}
+        className="flex items-center gap-1.5 py-1 px-2 rounded-md cursor-pointer text-xs transition-all duration-100"
+        style={{
+          paddingLeft: `${0.5 + depth * 1}rem`,
+          color: 'var(--text-secondary)',
+        }}
         onClick={handleClick}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)';
+          (e.currentTarget as HTMLDivElement).style.color = 'var(--text-primary)';
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+          (e.currentTarget as HTMLDivElement).style.color = 'var(--text-secondary)';
+        }}
       >
-        {item.type === 'folder' && (
-          <span className="text-gray-400">
-            {isExpanded ? (
-              <ChevronDown className="w-4 h-4" />
-            ) : (
-              <ChevronRight className="w-4 h-4" />
-            )}
-          </span>
-        )}
         {item.type === 'folder' ? (
-          <FolderTree className="w-4 h-4 text-blue-400" />
+          <>
+            <ChevronRight
+              className="w-3 h-3 flex-shrink-0 transition-transform duration-150"
+              style={{
+                transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                color: 'var(--text-muted)',
+              }}
+            />
+            {isExpanded
+              ? <FolderOpen className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+              : <Folder className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+            }
+          </>
         ) : (
-          <File className="w-4 h-4 text-gray-400" />
+          <>
+            <span className="w-3 flex-shrink-0" />
+            <FileText className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+          </>
         )}
-        <span className="text-gray-200">{item.name}</span>
+        <span className="truncate">{item.name}</span>
       </div>
+
       {item.type === 'folder' && isExpanded && item.children && (
         <div>
           {item.children.map((child, index) => (
@@ -67,12 +83,12 @@ function FileNode({ item, depth, onFileClick }: FileNodeProps) {
 
 export function FileExplorer({ files, onFileSelect }: FileExplorerProps) {
   return (
-    <div className="bg-gray-900 rounded-lg shadow-lg p-4 h-full overflow-auto">
-      <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-100">
-        <FolderTree className="w-5 h-5" />
-        File Explorer
-      </h2>
-      <div className="space-y-1">
+    <div className="h-full flex flex-col overflow-hidden p-3">
+      <p className="text-xs font-semibold uppercase tracking-widest mb-3 px-1"
+        style={{ color: 'var(--text-muted)' }}>
+        Files
+      </p>
+      <div className="flex-1 overflow-auto custom-scrollbar space-y-0.5">
         {files.map((file, index) => (
           <FileNode
             key={`${file.path}-${index}`}

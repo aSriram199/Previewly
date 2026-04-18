@@ -7,13 +7,90 @@ import { CodeEditor } from '../components/CodeEditor';
 import { PreviewFrame } from '../components/PreviewFrame';
 import { Step, FileItem, StepType } from '../types';
 import axios from 'axios';
-import { BACKEND_URL } from '../config';
+import { API_BASE_URL, buildApiUrl } from '../config';
 import { parseXml } from '../steps';
 import { useWebContainer } from '../context/WebContainerContext';
 import { Loader } from '../components/Loader';
 import { buildFileTree } from '../utils/fileTree';
+import { ArrowRight } from 'lucide-react';
 
 type LocationState = { prompt: string; prebuiltResponse?: string } | null;
+type ChatMessage = { role: 'user' | 'assistant'; content: string };
+type InitPayload = {
+  prompts: string[];
+  uiPrompts: string[];
+  response: string;
+};
+
+const pendingInitRequests = new Map<string, Promise<InitPayload>>();
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    const responseData = error.response?.data;
+    const responseMessage =
+      responseData &&
+      typeof responseData === 'object' &&
+      'message' in responseData &&
+      typeof responseData.message === 'string'
+        ? responseData.message
+        : undefined;
+
+    if (responseMessage) {
+      return responseMessage;
+    }
+
+    if (error.response?.status === 404) {
+      return `The backend API route was not found at ${API_BASE_URL}. Start the server or update your API URL settings.`;
+    }
+
+    if (error.code === 'ERR_NETWORK') {
+      return `Could not reach the backend at ${API_BASE_URL}. Start the server or update your API URL settings.`;
+    }
+  }
+
+  return fallback;
+}
+
+async function loadBuilderInit(prompt: string) {
+  const normalizedPrompt = prompt.trim();
+  const existingRequest = pendingInitRequests.get(normalizedPrompt);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = (async () => {
+    const templateResponse = await axios.post(buildApiUrl('/template'), {
+      prompt: normalizedPrompt,
+    });
+
+    const { prompts, uiPrompts } = templateResponse.data as {
+      prompts: string[];
+      uiPrompts: string[];
+    };
+
+    const stepsResponse = await axios.post(buildApiUrl('/chat'), {
+      messages: [...prompts, normalizedPrompt].map((content) => ({
+        role: 'user' as const,
+        content,
+      })),
+    });
+
+    return {
+      prompts,
+      uiPrompts,
+      response: stepsResponse.data.response as string,
+    };
+  })();
+
+  pendingInitRequests.set(normalizedPrompt, request);
+  void request.finally(() => {
+    if (pendingInitRequests.get(normalizedPrompt) === request) {
+      pendingInitRequests.delete(normalizedPrompt);
+    }
+  });
+
+  return request;
+}
 
 export function Builder() {
   const location = useLocation();
@@ -27,9 +104,12 @@ export function Builder() {
   const { prompt, prebuiltResponse } = state;
 
   const [userPrompt, setUserPrompt] = useState('');
-  const [llmMessages, setLlmMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [llmMessages, setLlmMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [templateSet, setTemplateSet] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [initAttempt, setInitAttempt] = useState(0);
   const webcontainer = useWebContainer();
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -39,7 +119,6 @@ export function Builder() {
   const [files, setFiles] = useState<FileItem[]>([]);
 
   // Apply pending file-creation steps to the file tree.
-  // Guard: only run when there are actually pending CreateFile steps to avoid wasteful renders.
   const hasPendingFileSteps = steps.some(
     (s) => s.status === 'pending' && s.type === StepType.CreateFile
   );
@@ -52,7 +131,7 @@ export function Builder() {
     }
   }, [steps]);
 
-  // Write changed files into the WebContainer incrementally (avoid full remount on every update).
+  // Write changed files into the WebContainer incrementally.
   useEffect(() => {
     if (!webcontainer || files.length === 0) return;
 
@@ -71,141 +150,268 @@ export function Builder() {
     writeFiles(files);
   }, [files, webcontainer]);
 
-  async function init() {
-    const response = await axios.post(`${BACKEND_URL}/template`, {
-      prompt: prompt.trim(),
-    });
-    setTemplateSet(true);
-
-    const { prompts, uiPrompts } = response.data;
-    setSteps(
-      parseXml(uiPrompts[0]).map((x: Step) => ({ ...x, status: 'pending' as const }))
-    );
-
-    setLoading(true);
-    const stepsResponse = await axios.post(`${BACKEND_URL}/chat`, {
-      messages: [...prompts, prompt].map((content) => ({ role: 'user', content })),
-    });
-    setLoading(false);
-
-    setSteps((s) => {
-      const highestId = s.reduce((max, step) => Math.max(max, step.id), 0);
-      return [
-        ...s,
-        ...parseXml(stepsResponse.data.response).map((x, index) => ({
-          ...x,
-          id: highestId + index + 1,
-          status: 'pending' as const,
-        })),
-      ];
-    });
-
-    const initialMessages = [...prompts, prompt].map((content) => ({ role: 'user' as const, content }));
-    setLlmMessages([...initialMessages, { role: 'assistant', content: stepsResponse.data.response }]);
-  }
-
   // Sends the current userPrompt to /chat and appends the response steps
   async function handleSendMessage() {
     if (!userPrompt.trim() || prebuiltResponse) return;
 
     const newMessage = { role: 'user' as const, content: userPrompt };
+    setErrorMessage('');
     setLoading(true);
 
-    const stepsResponse = await axios.post(`${BACKEND_URL}/chat`, {
-      messages: [...llmMessages, newMessage],
-    });
-    setLoading(false);
+    try {
+      const stepsResponse = await axios.post(buildApiUrl('/chat'), {
+        messages: [...llmMessages, newMessage],
+      });
 
-    const assistantMessage = { role: 'assistant' as const, content: stepsResponse.data.response };
-    setLlmMessages((prev) => [...prev, newMessage, assistantMessage]);
-    setUserPrompt('');
+      const assistantMessage = { role: 'assistant' as const, content: stepsResponse.data.response };
+      setLlmMessages((prev) => [...prev, newMessage, assistantMessage]);
+      setUserPrompt('');
 
-    setSteps((s) => {
-      const highestId = s.reduce((max, step) => Math.max(max, step.id), 0);
-      return [
-        ...s,
-        ...parseXml(stepsResponse.data.response).map((x, index) => ({
-          ...x,
-          id: highestId + index + 1,
-          status: 'pending' as const,
-        })),
-      ];
-    });
+      setSteps((s) => {
+        const highestId = s.reduce((max, step) => Math.max(max, step.id), 0);
+        return [
+          ...s,
+          ...parseXml(stepsResponse.data.response).map((x, index) => ({
+            ...x,
+            id: highestId + index + 1,
+            status: 'pending' as const,
+          })),
+        ];
+      });
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error, 'Unable to send your message right now.'));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
     if (prebuiltResponse && prebuiltResponse.trim().length > 0) {
       setTemplateSet(true);
+      setIsInitializing(false);
+      setErrorMessage('');
       setSteps(parseXml(prebuiltResponse).map((x: Step) => ({ ...x, status: 'pending' as const })));
       setLlmMessages([{ role: 'assistant', content: prebuiltResponse }]);
       return;
     }
-    init();
-  }, []);
+
+    let active = true;
+
+    setCurrentStep(1);
+    setSelectedFile(null);
+    setFiles([]);
+    setSteps([]);
+    setTemplateSet(false);
+    setErrorMessage('');
+    setIsInitializing(true);
+
+    void loadBuilderInit(prompt)
+      .then(({ prompts, uiPrompts, response }) => {
+        if (!active) return;
+
+        const templateSteps = parseXml(uiPrompts[0]).map((x: Step) => ({
+          ...x,
+          status: 'pending' as const,
+        }));
+        const highestId = templateSteps.reduce((max, step) => Math.max(max, step.id), 0);
+        const generatedSteps = parseXml(response).map((x, index) => ({
+          ...x,
+          id: highestId + index + 1,
+          status: 'pending' as const,
+        }));
+        const initialMessages = [...prompts, prompt].map((content) => ({
+          role: 'user' as const,
+          content,
+        }));
+
+        setTemplateSet(true);
+        setSteps([...templateSteps, ...generatedSteps]);
+        setLlmMessages([...initialMessages, { role: 'assistant', content: response }]);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setErrorMessage(
+          getApiErrorMessage(error, 'Unable to initialize the builder right now.')
+        );
+      })
+      .finally(() => {
+        if (active) {
+          setIsInitializing(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [prebuiltResponse, prompt, initAttempt]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-950 to-blue-900 flex flex-col relative overflow-hidden">
-      {/* Decorative blurred background */}
-      <div className="absolute inset-0 pointer-events-none opacity-20 z-0">
-        <div className="absolute top-1/3 left-1/4 w-96 h-96 bg-gradient-radial from-purple-700/40 to-transparent rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-gradient-radial from-blue-700/40 to-transparent rounded-full blur-2xl animate-pulse" />
-      </div>
-      <header className="bg-gradient-to-r from-gray-900 via-purple-900 to-blue-900 border-b border-purple-800 px-8 py-6 shadow-lg z-10">
-        <h1 className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 drop-shadow-lg">Website Builder</h1>
-        <p className="text-base text-gray-300 mt-1 font-mono">
-          Prompt: <span className="text-purple-300">{prompt}</span>
-        </p>
+    <div
+      className="min-h-screen flex flex-col relative overflow-hidden"
+      style={{ background: 'var(--bg-base)' }}
+    >
+      {/* Ambient orbs */}
+      <div className="ambient-orb ambient-orb-1" style={{ opacity: 0.4, top: '-5%', left: '-3%' }} />
+      <div className="ambient-orb ambient-orb-2" style={{ opacity: 0.35 }} />
+
+      {/* Header */}
+      <header
+        className="flex items-center justify-between px-6 py-4 z-10 flex-shrink-0"
+        style={{
+          background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="pulse-dot" />
+          <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+            Previewly
+          </span>
+          <span
+            className="hidden sm:block text-xs px-2 py-0.5 rounded-md font-mono truncate"
+            style={{
+              background: 'var(--bg-elevated)',
+              color: 'var(--text-secondary)',
+              maxWidth: 340,
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            {prompt}
+          </span>
+        </div>
       </header>
+
+      {/* Main layout */}
       <div className="flex-1 overflow-hidden z-10">
-        <div className="h-full grid grid-cols-12 gap-8 p-8">
-          {/* Sidebar: Steps and chat */}
-          <div className="col-span-3 space-y-8 overflow-auto bg-gray-900/80 rounded-2xl shadow-xl p-6 backdrop-blur-md border border-purple-900">
-            <div>
-              <div className="max-h-[60vh] overflow-scroll custom-scrollbar">
-                <StepsList
-                  steps={steps}
-                  currentStep={currentStep}
-                  onStepClick={setCurrentStep}
-                />
-              </div>
-              <div className="mt-6">
-                <div className="flex flex-col gap-2">
-                  {(loading || !templateSet) && <Loader />}
-                  {!(loading || !templateSet) && (
-                    <>
-                      <textarea
-                        value={userPrompt}
-                        onChange={(e) => setUserPrompt(e.target.value)}
-                        className="p-2 w-full rounded-lg bg-gray-800 text-gray-100 border border-gray-700 focus:ring-2 focus:ring-purple-500 focus:border-transparent placeholder-gray-400"
-                        placeholder="Ask for a new feature or change..."
-                        disabled={!!prebuiltResponse}
-                      />
-                      <button
-                        disabled={!!prebuiltResponse || !userPrompt.trim()}
-                        title={prebuiltResponse ? 'Disabled for prebuilt content' : undefined}
-                        onClick={handleSendMessage}
-                        className="bg-gradient-to-r from-purple-500 to-blue-500 text-white px-4 py-2 rounded-lg font-semibold shadow hover:from-purple-600 hover:to-blue-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Send
-                      </button>
-                    </>
+        <div
+          className="h-full grid"
+          style={{
+            gridTemplateColumns: '280px 200px 1fr',
+            gap: '1px',
+            background: 'var(--border-subtle)',
+          }}
+        >
+          {/* ── Sidebar: Steps + Chat ───────────────────────── */}
+          <aside
+            className="flex flex-col overflow-hidden"
+            style={{ background: 'var(--bg-surface)' }}
+          >
+            <div className="flex-1 overflow-auto custom-scrollbar p-4">
+              <StepsList
+                steps={steps}
+                currentStep={currentStep}
+                onStepClick={setCurrentStep}
+              />
+            </div>
+
+            {/* Chat input */}
+            <div
+              className="p-4 flex-shrink-0"
+              style={{ borderTop: '1px solid var(--border-subtle)' }}
+            >
+              {errorMessage && (
+                <div
+                  className="mb-3 rounded-lg px-3 py-2 text-xs fade-up"
+                  style={{
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.25)',
+                    color: '#fca5a5',
+                  }}
+                >
+                  <p>{errorMessage}</p>
+                  {!templateSet && (
+                    <button
+                      onClick={() => setInitAttempt((a) => a + 1)}
+                      className="mt-2 text-xs font-semibold underline underline-offset-2 hover:no-underline transition-all"
+                      style={{ color: '#f87171' }}
+                    >
+                      Retry
+                    </button>
                   )}
                 </div>
-              </div>
+              )}
+
+              {(isInitializing || loading) && <Loader />}
+
+              {!isInitializing && templateSet && (
+                <div className="flex flex-col gap-2 fade-up">
+                  <textarea
+                    value={userPrompt}
+                    onChange={(e) => setUserPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSendMessage();
+                    }}
+                    className="w-full resize-none rounded-lg px-3 py-2 text-xs outline-none transition-all duration-200"
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-primary)',
+                      minHeight: 72,
+                    }}
+                    placeholder="Ask for a change or new feature…"
+                    disabled={!!prebuiltResponse}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-active)';
+                      e.currentTarget.style.boxShadow = '0 0 0 3px var(--accent-glow)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  />
+                  <button
+                    disabled={!!prebuiltResponse || !userPrompt.trim()}
+                    onClick={handleSendMessage}
+                    className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200"
+                    style={{
+                      background: userPrompt.trim() ? 'var(--accent)' : 'var(--bg-elevated)',
+                      color: userPrompt.trim() ? '#0d0f12' : 'var(--text-muted)',
+                      cursor: userPrompt.trim() ? 'pointer' : 'not-allowed',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (userPrompt.trim())
+                        (e.currentTarget as HTMLButtonElement).style.opacity = '0.88';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                    }}
+                  >
+                    Send <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
-          </div>
-          {/* File Explorer */}
-          <div className="col-span-2">
+          </aside>
+
+          {/* ── File Explorer ───────────────────────────────── */}
+          <div
+            className="overflow-hidden"
+            style={{ background: 'var(--bg-surface)' }}
+          >
             <FileExplorer files={files} onFileSelect={setSelectedFile} />
           </div>
-          {/* Main Content: Code/Preview */}
-          <div className="col-span-7 bg-gray-900/90 rounded-2xl shadow-2xl p-6 h-[calc(100vh-10rem)] border border-blue-900">
-            <TabView activeTab={activeTab} onTabChange={setActiveTab} />
-            <div className="h-[calc(100%-4rem)]">
+
+          {/* ── Code / Preview Panel ────────────────────────── */}
+          <div
+            className="flex flex-col overflow-hidden"
+            style={{ background: 'var(--bg-base)' }}
+          >
+            <div className="px-4 pt-4 flex-shrink-0">
+              <TabView activeTab={activeTab} onTabChange={setActiveTab} />
+            </div>
+            <div className="flex-1 overflow-hidden px-4 pb-4">
               {activeTab === 'code' ? (
                 <CodeEditor file={selectedFile} />
+              ) : webcontainer ? (
+                <PreviewFrame webContainer={webcontainer} />
               ) : (
-                <PreviewFrame webContainer={webcontainer!} />
+                <div
+                  className="h-full flex flex-col items-center justify-center gap-3 text-sm fade-up"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  <div className="accent-spinner" />
+                  <span>Booting WebContainer…</span>
+                </div>
               )}
             </div>
           </div>

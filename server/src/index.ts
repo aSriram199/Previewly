@@ -17,6 +17,9 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
+const parsedPort = Number.parseInt(process.env.PORT ?? "3000", 10);
+const port = Number.isNaN(parsedPort) ? 3000 : parsedPort;
+
 // POST /template
 // Uses gpt-4o-mini (cheap/fast) to classify the prompt as 'react' or 'node'.
 app.post("/template", async (req: Request, res: Response) => {
@@ -119,6 +122,6 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ message: "Internal server error." });
 });
 
-app.listen(3000, () => {
-  console.log("[Server] Running on port 3000");
+app.listen(port, () => {
+  console.log(`[Server] Running on port ${port}`);
 });

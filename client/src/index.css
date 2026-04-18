@@ -2,26 +2,114 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom scrollbar — used in Builder sidebar */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+/* ─── Design Tokens ──────────────────────────────────────────────── */
+:root {
+  --bg-base:        #0d0f12;
+  --bg-surface:     #13161b;
+  --bg-elevated:    #1a1e26;
+  --bg-hover:       #20252f;
+  --border-subtle:  rgba(255,255,255,0.06);
+  --border-active:  rgba(255,255,255,0.14);
+
+  --accent:         #6ee7b7;   /* emerald-300 — primary accent */
+  --accent-dim:     rgba(110,231,183,0.12);
+  --accent-glow:    rgba(110,231,183,0.25);
+
+  --text-primary:   #f0f2f5;
+  --text-secondary: #8b94a3;
+  --text-muted:     #4b5563;
+
+  --radius:         12px;
+  --radius-sm:      8px;
+  --radius-lg:      18px;
+
+  --ease-smooth:    cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring:    cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
+/* ─── Base ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* ─── Scrollbar ──────────────────────────────────────────────────── */
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.4); /* purple-500 at 40% opacity */
+  background: var(--border-active);
   border-radius: 9999px;
+  transition: background 0.2s;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+.custom-scrollbar { scrollbar-width: thin; scrollbar-color: var(--border-active) transparent; }
+
+/* ─── Ambient orb (shared background deco) ───────────────────────── */
+.ambient-orb {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(80px);
+  opacity: 0;
+  animation: orbFloat 8s var(--ease-smooth) infinite alternate;
+}
+.ambient-orb-1 {
+  width: 480px; height: 480px;
+  background: radial-gradient(circle, rgba(110,231,183,0.12) 0%, transparent 70%);
+  top: -10%; left: -8%;
+  animation-delay: 0s;
+  animation: orbFloat 10s var(--ease-smooth) infinite alternate;
+}
+.ambient-orb-2 {
+  width: 360px; height: 360px;
+  background: radial-gradient(circle, rgba(99,102,241,0.10) 0%, transparent 70%);
+  bottom: -5%; right: -5%;
+  animation: orbFloat 12s var(--ease-smooth) infinite alternate-reverse;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 92, 246, 0.7);
+@keyframes orbFloat {
+  0%   { opacity: 0.6; transform: translate(0, 0) scale(1); }
+  50%  { opacity: 0.9; transform: translate(20px, -20px) scale(1.05); }
+  100% { opacity: 0.6; transform: translate(-10px, 15px) scale(0.97); }
 }
 
-/* Firefox */
-.custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(139, 92, 246, 0.4) transparent;
+/* ─── Spinner ────────────────────────────────────────────────────── */
+@keyframes spinSmooth {
+  to { transform: rotate(360deg); }
+}
+.accent-spinner {
+  width: 28px; height: 28px;
+  border: 2px solid var(--border-active);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spinSmooth 0.8s linear infinite;
+}
+
+/* ─── Fade-in slide-up ───────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up {
+  animation: fadeUp 0.5s var(--ease-smooth) both;
+}
+.fade-up-delay-1 { animation-delay: 0.08s; }
+.fade-up-delay-2 { animation-delay: 0.16s; }
+.fade-up-delay-3 { animation-delay: 0.24s; }
+
+/* ─── Pulse dot ──────────────────────────────────────────────────── */
+@keyframes pulseDot {
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50%       { opacity: 1;   transform: scale(1.1); }
+}
+.pulse-dot {
+  width: 6px; height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: pulseDot 1.8s ease-in-out infinite;
 }

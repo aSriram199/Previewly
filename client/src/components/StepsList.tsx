@@ -1,4 +1,4 @@
-import { CheckCircle, Circle, Clock } from 'lucide-react';
+import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 import { Step } from '../types';
 
 interface StepsListProps {
@@ -9,30 +9,53 @@ interface StepsListProps {
 
 export function StepsList({ steps, currentStep, onStepClick }: StepsListProps) {
   return (
-    <div className="bg-gray-900 rounded-lg shadow-lg p-4 h-full overflow-auto">
-      <h2 className="text-lg font-semibold mb-4 text-gray-100">Build Steps</h2>
-      <div className="space-y-4">
-        {steps.map((step) => (
+    <div className="h-full">
+      <p className="text-xs font-semibold uppercase tracking-widest mb-4"
+        style={{ color: 'var(--text-muted)' }}>
+        Build Steps
+      </p>
+      <div className="space-y-1">
+        {steps.map((step, idx) => (
           <div
             key={step.id}
-            className={`p-1 rounded-lg cursor-pointer transition-colors ${
-              currentStep === step.id
-                ? 'bg-gray-800 border border-gray-700'
-                : 'hover:bg-gray-800'
-            }`}
+            className="flex items-start gap-2.5 px-2 py-2 rounded-lg cursor-pointer transition-all duration-150"
+            style={{
+              background: currentStep === step.id ? 'var(--bg-elevated)' : 'transparent',
+              border: currentStep === step.id
+                ? '1px solid var(--border-active)'
+                : '1px solid transparent',
+            }}
             onClick={() => onStepClick(step.id)}
+            onMouseEnter={(e) => {
+              if (currentStep !== step.id)
+                (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)';
+            }}
+            onMouseLeave={(e) => {
+              if (currentStep !== step.id)
+                (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+            }}
           >
-            <div className="flex items-center gap-2">
+            <div className="mt-0.5 flex-shrink-0">
               {step.status === 'completed' ? (
-                <CheckCircle className="w-5 h-5 text-green-500" />
+                <CheckCircle2 className="w-4 h-4" style={{ color: 'var(--accent)' }} />
               ) : step.status === 'in-progress' ? (
-                <Clock className="w-5 h-5 text-blue-400" />
+                <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--accent)' }} />
               ) : (
-                <Circle className="w-5 h-5 text-gray-600" />
+                <Circle className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
               )}
-              <h3 className="font-medium text-gray-100">{step.title}</h3>
             </div>
-            <p className="text-sm text-gray-400 mt-2">{step.description}</p>
+            <div className="min-w-0">
+              <p className="text-xs font-medium leading-snug truncate"
+                style={{ color: currentStep === step.id ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                {step.title}
+              </p>
+              {step.description && (
+                <p className="text-xs mt-0.5 leading-snug line-clamp-2"
+                  style={{ color: 'var(--text-muted)' }}>
+                  {step.description}
+                </p>
+              )}
+            </div>
           </div>
         ))}
       </div>

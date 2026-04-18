@@ -1,60 +1,164 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles } from 'lucide-react';
+import { ArrowRight, Sparkles, Zap, Code2, Eye } from 'lucide-react';
 
+const SUGGESTIONS = [
+  'A portfolio site with dark mode and smooth scroll',
+  'A SaaS landing page with pricing cards',
+  'A recipe blog with search and categories',
+  'An e-commerce storefront with a cart',
+];
 
 export function Home() {
   const [prompt, setPrompt] = useState('');
+  const [isFocused, setIsFocused] = useState(false);
   const navigate = useNavigate();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('[Home] Submit with prompt:', prompt);
     if (prompt.trim()) {
-      console.log('[Home] Navigating to /builder with prompt');
       navigate('/builder', { state: { prompt } });
     }
   };
 
+  const handleSuggestion = (text: string) => {
+    setPrompt(text);
+    textareaRef.current?.focus();
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-gray-900 flex flex-col items-center justify-center p-0 relative overflow-hidden">
-      {/* Decorative background sparkles */}
-      <div className="absolute inset-0 pointer-events-none opacity-30 z-0">
-        <div className="absolute top-1/4 left-1/3 w-96 h-96 bg-gradient-radial from-blue-500/30 to-transparent rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-gradient-radial from-purple-500/30 to-transparent rounded-full blur-2xl animate-pulse" />
+    <div
+      className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden"
+      style={{ background: 'var(--bg-base)' }}
+    >
+      {/* Ambient background orbs */}
+      <div className="ambient-orb ambient-orb-1" />
+      <div className="ambient-orb ambient-orb-2" />
+
+      {/* Top badge */}
+      <div className="fade-up mb-10 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
+        style={{
+          background: 'var(--accent-dim)',
+          color: 'var(--accent)',
+          border: '1px solid rgba(110,231,183,0.2)',
+        }}>
+        <Sparkles className="w-3.5 h-3.5" />
+        AI-Powered Website Builder
       </div>
-      <div className="max-w-2xl w-full z-10">
-        <div className="text-center mb-10 mt-10">
-          <div className="flex justify-center mb-4">
-            <Sparkles className="w-14 h-14 text-purple-400 animate-bounce" />
+
+      {/* Hero heading */}
+      <h1 className="fade-up fade-up-delay-1 text-center font-bold tracking-tight"
+        style={{ fontSize: 'clamp(2rem, 5vw, 3.5rem)', color: 'var(--text-primary)', maxWidth: 700, lineHeight: 1.1 }}>
+        Describe it.{' '}
+        <span style={{ color: 'var(--accent)' }}>Build it.</span>
+        <br />Ship it.
+      </h1>
+
+      <p className="fade-up fade-up-delay-2 mt-4 text-center text-base"
+        style={{ color: 'var(--text-secondary)', maxWidth: 480 }}>
+        Turn any idea into a fully-functional web app — with code, file structure, and live preview — in seconds.
+      </p>
+
+      {/* Feature pills */}
+      <div className="fade-up fade-up-delay-2 flex flex-wrap justify-center gap-3 mt-6">
+        {[
+          { icon: <Zap className="w-3.5 h-3.5" />, label: 'Instant generation' },
+          { icon: <Code2 className="w-3.5 h-3.5" />, label: 'Full source code' },
+          { icon: <Eye className="w-3.5 h-3.5" />, label: 'Live preview' },
+        ].map(({ icon, label }) => (
+          <span key={label}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium"
+            style={{
+              background: 'var(--bg-elevated)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-subtle)',
+            }}>
+            {icon} {label}
+          </span>
+        ))}
+      </div>
+
+      {/* Input card */}
+      <form onSubmit={handleSubmit} className="fade-up fade-up-delay-3 w-full mt-10"
+        style={{ maxWidth: 620 }}>
+        <div
+          className="rounded-2xl p-1 transition-all duration-300"
+          style={{
+            background: 'var(--bg-surface)',
+            border: `1px solid ${isFocused ? 'var(--border-active)' : 'var(--border-subtle)'}`,
+            boxShadow: isFocused
+              ? '0 0 0 4px var(--accent-glow), 0 24px 48px rgba(0,0,0,0.4)'
+              : '0 8px 32px rgba(0,0,0,0.3)',
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSubmit(e);
+            }}
+            placeholder="Describe the website you want to build…"
+            rows={4}
+            className="w-full resize-none bg-transparent outline-none text-sm leading-relaxed px-4 pt-4 pb-2"
+            style={{ color: 'var(--text-primary)' }}
+          />
+          <div className="flex items-center justify-between px-3 pb-3 pt-1">
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              ⌘ + Enter to generate
+            </span>
+            <button
+              type="submit"
+              disabled={!prompt.trim()}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
+              style={{
+                background: prompt.trim() ? 'var(--accent)' : 'var(--bg-elevated)',
+                color: prompt.trim() ? '#0d0f12' : 'var(--text-muted)',
+                cursor: prompt.trim() ? 'pointer' : 'not-allowed',
+                transform: 'translateZ(0)',
+              }}
+              onMouseEnter={(e) => {
+                if (prompt.trim()) (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.03)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1)';
+              }}
+            >
+              Generate <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
-          <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 mb-4 drop-shadow-lg">
-            Build Your Dream Web App Instantly 🚀
-          </h1>
-          <p className="text-lg text-gray-200 max-w-xl mx-auto">
-            AI-powered website builder: Describe your vision, and get a step-by-step plan, code, and live preview. No coding skills required!
-          </p>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="bg-gray-800/80 rounded-xl shadow-2xl p-8 backdrop-blur-md">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the website you want to build..."
-              className="w-full h-32 p-4 bg-gray-900/80 text-gray-100 border border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none placeholder-gray-400 text-base"
-            />
-            <div className="mt-6">
-              <button
-                type="submit"
-                className="w-full bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white py-3 px-6 rounded-lg font-semibold shadow-md hover:from-blue-700 hover:via-purple-700 hover:to-pink-700 transition-all text-lg tracking-wide"
-              >
-                Generate Website Plan
-              </button>
-            </div>
-          </div>
-        </form>
-      </div>
+
+        {/* Suggestion chips */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {SUGGESTIONS.map((s) => (
+            <button
+              type="button"
+              key={s}
+              onClick={() => handleSuggestion(s)}
+              className="px-3 py-1.5 rounded-lg text-xs transition-all duration-150"
+              style={{
+                background: 'var(--bg-elevated)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-active)';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
+              }}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </form>
     </div>
   );
 }
