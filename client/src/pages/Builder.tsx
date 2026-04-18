@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, Navigate } from 'react-router-dom';
 import { StepsList } from '../components/StepsList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -16,77 +16,109 @@ import { ArrowRight } from 'lucide-react';
 
 type LocationState = { prompt: string; prebuiltResponse?: string } | null;
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
-type InitPayload = {
-  prompts: string[];
-  uiPrompts: string[];
-  response: string;
-};
+type InitPayload = { prompts: string[]; uiPrompts: string[]; response: string };
+export type InstallStatus = 'idle' | 'installing' | 'ready' | 'error';
 
 const pendingInitRequests = new Map<string, Promise<InitPayload>>();
 
-function getApiErrorMessage(error: unknown, fallback: string) {
+function getApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
-    const responseData = error.response?.data;
-    const responseMessage =
-      responseData &&
-      typeof responseData === 'object' &&
-      'message' in responseData &&
-      typeof responseData.message === 'string'
-        ? responseData.message
+    const data = error.response?.data;
+    const msg =
+      data && typeof data === 'object' && 'message' in data && typeof data.message === 'string'
+        ? data.message
         : undefined;
-
-    if (responseMessage) {
-      return responseMessage;
-    }
-
-    if (error.response?.status === 404) {
+    if (msg) return msg;
+    if (error.response?.status === 404)
       return `The backend API route was not found at ${API_BASE_URL}. Start the server or update your API URL settings.`;
-    }
-
-    if (error.code === 'ERR_NETWORK') {
+    if (error.code === 'ERR_NETWORK')
       return `Could not reach the backend at ${API_BASE_URL}. Start the server or update your API URL settings.`;
-    }
   }
-
+  if (error instanceof Error) return error.message;
   return fallback;
 }
 
-async function loadBuilderInit(prompt: string) {
-  const normalizedPrompt = prompt.trim();
-  const existingRequest = pendingInitRequests.get(normalizedPrompt);
-  if (existingRequest) {
-    return existingRequest;
+async function streamChat(
+  messages: Array<{ role: string; content: string }>,
+  onDelta?: (accumulated: string) => void
+): Promise<string> {
+  const response = await fetch(buildApiUrl('/chat'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+
+  if (!response.ok || !response.body) {
+    let errMsg = `Server error: ${response.status}`;
+    try {
+      const json = await response.json();
+      if (json?.message) errMsg = json.message;
+    } catch { /* swallow */ }
+    throw new Error(errMsg);
   }
 
-  const request = (async () => {
-    const templateResponse = await axios.post(buildApiUrl('/template'), {
-      prompt: normalizedPrompt,
-    });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullContent = '';
 
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      if (!part.startsWith('data: ')) continue;
+      try {
+        const payload = JSON.parse(part.slice(6)) as
+          | { delta: string }
+          | { done: true; response: string }
+          | { error: string };
+
+        if ('error' in payload) throw new Error(payload.error);
+
+        if ('done' in payload) {
+          fullContent = payload.response;
+        } else {
+          fullContent += payload.delta;
+          onDelta?.(fullContent);
+        }
+      } catch (parseErr) {
+        if (parseErr instanceof Error && parseErr.message !== 'Unexpected end of JSON input') {
+          throw parseErr;
+        }
+      }
+    }
+  }
+
+  return fullContent;
+}
+
+async function loadBuilderInit(prompt: string): Promise<InitPayload> {
+  const key = prompt.trim();
+  const existing = pendingInitRequests.get(key);
+  if (existing) return existing;
+
+  const request = (async (): Promise<InitPayload> => {
+    const templateResponse = await axios.post(buildApiUrl('/template'), { prompt: key });
     const { prompts, uiPrompts } = templateResponse.data as {
       prompts: string[];
       uiPrompts: string[];
     };
 
-    const stepsResponse = await axios.post(buildApiUrl('/chat'), {
-      messages: [...prompts, normalizedPrompt].map((content) => ({
-        role: 'user' as const,
-        content,
-      })),
-    });
+    const response = await streamChat(
+      [...prompts, key].map((content) => ({ role: 'user', content }))
+    );
 
-    return {
-      prompts,
-      uiPrompts,
-      response: stepsResponse.data.response as string,
-    };
+    return { prompts, uiPrompts, response };
   })();
 
-  pendingInitRequests.set(normalizedPrompt, request);
+  pendingInitRequests.set(key, request);
   void request.finally(() => {
-    if (pendingInitRequests.get(normalizedPrompt) === request) {
-      pendingInitRequests.delete(normalizedPrompt);
-    }
+    if (pendingInitRequests.get(key) === request) pendingInitRequests.delete(key);
   });
 
   return request;
@@ -96,10 +128,7 @@ export function Builder() {
   const location = useLocation();
   const state = location.state as LocationState;
 
-  // Guard: redirect home if navigated here without a prompt
-  if (!state?.prompt) {
-    return <Navigate to="/" replace />;
-  }
+  if (!state?.prompt) return <Navigate to="/" replace />;
 
   const { prompt, prebuiltResponse } = state;
 
@@ -110,7 +139,7 @@ export function Builder() {
   const [templateSet, setTemplateSet] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [initAttempt, setInitAttempt] = useState(0);
-  const webcontainer = useWebContainer();
+  const [streamingText, setStreamingText] = useState('');
 
   const [currentStep, setCurrentStep] = useState(1);
   const [activeTab, setActiveTab] = useState<'code' | 'preview'>('code');
@@ -118,7 +147,16 @@ export function Builder() {
   const [steps, setSteps] = useState<Step[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
 
-  // Apply pending file-creation steps to the file tree.
+  const webcontainer = useWebContainer();
+  const [installStatus, setInstallStatus] = useState<InstallStatus>('idle');
+  const installTriggered = useRef(false);
+  // path → content of files already written; only changed files are re-written to
+  // avoid triggering unnecessary Vite HMR cycles that cause a mid-reload blank screen.
+  const writtenFilesRef = useRef<Map<string, string>>(new Map());
+  // content of package.json at the time of last npm install; used to detect
+  // when a follow-up adds new dependencies and a re-install is required.
+  const lastInstalledPkgJson = useRef<string | null>(null);
+
   const hasPendingFileSteps = steps.some(
     (s) => s.status === 'pending' && s.type === StepType.CreateFile
   );
@@ -131,39 +169,98 @@ export function Builder() {
     }
   }, [steps]);
 
-  // Write changed files into the WebContainer incrementally.
   useEffect(() => {
     if (!webcontainer || files.length === 0) return;
 
-    const writeFiles = async (items: FileItem[], basePath = '') => {
+    const written = writtenFilesRef.current;
+
+    const writeChangedFiles = async (items: FileItem[], basePath = '') => {
       for (const item of items) {
         const fullPath = `${basePath}/${item.name}`;
         if (item.type === 'folder') {
-          await webcontainer.fs.mkdir(fullPath, { recursive: true }).catch(() => { });
-          if (item.children) await writeFiles(item.children, fullPath);
+          await webcontainer.fs.mkdir(fullPath, { recursive: true }).catch(() => {});
+          if (item.children) await writeChangedFiles(item.children, fullPath);
         } else {
-          await webcontainer.fs.writeFile(fullPath, item.content ?? '');
+          const newContent = item.content ?? '';
+          if (written.get(fullPath) === newContent) continue;
+          await webcontainer.fs.writeFile(fullPath, newContent);
+          written.set(fullPath, newContent);
         }
       }
     };
 
-    writeFiles(files);
+    writeChangedFiles(files);
   }, [files, webcontainer]);
 
-  // Sends the current userPrompt to /chat and appends the response steps
+  const packageJsonFile = files.find((f) => f.type === 'file' && f.name === 'package.json');
+  const packageJsonContent = packageJsonFile?.content ?? null;
+
+  useEffect(() => {
+    if (!webcontainer || !packageJsonContent) return;
+
+    const isFirstInstall = !installTriggered.current;
+    const pkgChanged =
+      lastInstalledPkgJson.current !== null &&
+      lastInstalledPkgJson.current !== packageJsonContent;
+
+    if (!isFirstInstall && !pkgChanged) return;
+
+    installTriggered.current = true;
+    setInstallStatus('installing');
+
+    const timer = setTimeout(async () => {
+      try {
+        const installProcess = await webcontainer.spawn('npm', ['install']);
+
+        installProcess.output.pipeTo(
+          new WritableStream({
+            write(chunk) {
+              if (import.meta.env.DEV) console.log('[npm install]', chunk);
+            },
+          })
+        );
+
+        const exitCode = await installProcess.exit;
+        if (exitCode === 0) {
+          lastInstalledPkgJson.current = packageJsonContent;
+          setInstallStatus('ready');
+        } else {
+          console.error(`[Builder] npm install exited with code ${exitCode}.`);
+          setInstallStatus('error');
+        }
+      } catch (err) {
+        console.error('[Builder] npm install failed:', err);
+        setInstallStatus('error');
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webcontainer, packageJsonContent]);
+
+  useEffect(() => {
+    installTriggered.current = false;
+    lastInstalledPkgJson.current = null;
+    writtenFilesRef.current = new Map();
+    setInstallStatus('idle');
+  }, [prompt]);
+
   async function handleSendMessage() {
     if (!userPrompt.trim() || prebuiltResponse) return;
 
-    const newMessage = { role: 'user' as const, content: userPrompt };
+    const newMessage: ChatMessage = { role: 'user', content: userPrompt };
     setErrorMessage('');
     setLoading(true);
+    setStreamingText('');
 
     try {
-      const stepsResponse = await axios.post(buildApiUrl('/chat'), {
-        messages: [...llmMessages, newMessage],
-      });
+      const fullContent = await streamChat(
+        [...llmMessages, newMessage],
+        (accumulated) => setStreamingText(accumulated)
+      );
 
-      const assistantMessage = { role: 'assistant' as const, content: stepsResponse.data.response };
+      setStreamingText('');
+      const assistantMessage: ChatMessage = { role: 'assistant', content: fullContent };
       setLlmMessages((prev) => [...prev, newMessage, assistantMessage]);
       setUserPrompt('');
 
@@ -171,7 +268,7 @@ export function Builder() {
         const highestId = s.reduce((max, step) => Math.max(max, step.id), 0);
         return [
           ...s,
-          ...parseXml(stepsResponse.data.response).map((x, index) => ({
+          ...parseXml(fullContent).map((x, index) => ({
             ...x,
             id: highestId + index + 1,
             status: 'pending' as const,
@@ -182,6 +279,7 @@ export function Builder() {
       setErrorMessage(getApiErrorMessage(error, 'Unable to send your message right now.'));
     } finally {
       setLoading(false);
+      setStreamingText('');
     }
   }
 
@@ -203,6 +301,7 @@ export function Builder() {
     setSteps([]);
     setTemplateSet(false);
     setErrorMessage('');
+    setStreamingText('');
     setIsInitializing(true);
 
     void loadBuilderInit(prompt)
@@ -230,13 +329,12 @@ export function Builder() {
       })
       .catch((error) => {
         if (!active) return;
-        setErrorMessage(
-          getApiErrorMessage(error, 'Unable to initialize the builder right now.')
-        );
+        setErrorMessage(getApiErrorMessage(error, 'Unable to initialize the builder right now.'));
       })
       .finally(() => {
         if (active) {
           setIsInitializing(false);
+          setStreamingText('');
         }
       });
 
@@ -250,17 +348,12 @@ export function Builder() {
       className="min-h-screen flex flex-col relative overflow-hidden"
       style={{ background: 'var(--bg-base)' }}
     >
-      {/* Ambient orbs */}
       <div className="ambient-orb ambient-orb-1" style={{ opacity: 0.4, top: '-5%', left: '-3%' }} />
       <div className="ambient-orb ambient-orb-2" style={{ opacity: 0.35 }} />
 
-      {/* Header */}
       <header
         className="flex items-center justify-between px-6 py-4 z-10 flex-shrink-0"
-        style={{
-          background: 'var(--bg-surface)',
-          borderBottom: '1px solid var(--border-subtle)',
-        }}
+        style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}
       >
         <div className="flex items-center gap-3">
           <div className="pulse-dot" />
@@ -272,16 +365,55 @@ export function Builder() {
             style={{
               background: 'var(--bg-elevated)',
               color: 'var(--text-secondary)',
-              maxWidth: 340,
+              maxWidth: 360,
               border: '1px solid var(--border-subtle)',
             }}
           >
             {prompt}
           </span>
         </div>
+
+        {installStatus !== 'idle' && (
+          <div
+            className="flex items-center gap-2 text-xs px-3 py-1 rounded-full"
+            style={{
+              background:
+                installStatus === 'ready'
+                  ? 'rgba(110,231,183,0.1)'
+                  : installStatus === 'error'
+                  ? 'rgba(239,68,68,0.1)'
+                  : 'var(--bg-elevated)',
+              color:
+                installStatus === 'ready'
+                  ? 'var(--accent)'
+                  : installStatus === 'error'
+                  ? '#f87171'
+                  : 'var(--text-secondary)',
+              border: `1px solid ${
+                installStatus === 'ready'
+                  ? 'rgba(110,231,183,0.2)'
+                  : installStatus === 'error'
+                  ? 'rgba(239,68,68,0.2)'
+                  : 'var(--border-subtle)'
+              }`,
+            }}
+          >
+            {installStatus === 'installing' && (
+              <span
+                className="w-2 h-2 rounded-full border border-current border-t-transparent animate-spin"
+                style={{ display: 'inline-block' }}
+              />
+            )}
+            {installStatus === 'ready' && <span>●</span>}
+            {installStatus === 'installing'
+              ? 'Installing deps…'
+              : installStatus === 'ready'
+              ? 'Ready'
+              : 'Install failed'}
+          </div>
+        )}
       </header>
 
-      {/* Main layout */}
       <div className="flex-1 overflow-hidden z-10">
         <div
           className="h-full grid"
@@ -291,7 +423,6 @@ export function Builder() {
             background: 'var(--border-subtle)',
           }}
         >
-          {/* ── Sidebar: Steps + Chat ───────────────────────── */}
           <aside
             className="flex flex-col overflow-hidden"
             style={{ background: 'var(--bg-surface)' }}
@@ -302,9 +433,37 @@ export function Builder() {
                 currentStep={currentStep}
                 onStepClick={setCurrentStep}
               />
+
+              {(isInitializing || loading) && streamingText && (
+                <div
+                  className="mt-4 rounded-lg px-3 py-2 text-xs leading-relaxed fade-up"
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-muted)',
+                    maxHeight: 120,
+                    overflow: 'hidden',
+                    fontFamily: 'monospace',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {streamingText.slice(-400)}
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: 6,
+                      height: '1em',
+                      background: 'var(--accent)',
+                      marginLeft: 2,
+                      verticalAlign: 'text-bottom',
+                      animation: 'pulseDot 0.8s ease-in-out infinite',
+                    }}
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Chat input */}
             <div
               className="p-4 flex-shrink-0"
               style={{ borderTop: '1px solid var(--border-subtle)' }}
@@ -331,7 +490,15 @@ export function Builder() {
                 </div>
               )}
 
-              {(isInitializing || loading) && <Loader />}
+              {(isInitializing || loading) && !streamingText && <Loader />}
+              {(isInitializing || loading) && streamingText && (
+                <div className="flex items-center gap-2 py-2">
+                  <div className="accent-spinner" style={{ width: 16, height: 16 }} />
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Generating… {streamingText.length.toLocaleString()} chars
+                  </span>
+                </div>
+              )}
 
               {!isInitializing && templateSet && (
                 <div className="flex flex-col gap-2 fade-up">
@@ -349,7 +516,7 @@ export function Builder() {
                       minHeight: 72,
                     }}
                     placeholder="Ask for a change or new feature…"
-                    disabled={!!prebuiltResponse}
+                    disabled={!!prebuiltResponse || loading}
                     onFocus={(e) => {
                       e.currentTarget.style.borderColor = 'var(--border-active)';
                       e.currentTarget.style.boxShadow = '0 0 0 3px var(--accent-glow)';
@@ -360,20 +527,13 @@ export function Builder() {
                     }}
                   />
                   <button
-                    disabled={!!prebuiltResponse || !userPrompt.trim()}
+                    disabled={!!prebuiltResponse || !userPrompt.trim() || loading}
                     onClick={handleSendMessage}
                     className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200"
                     style={{
-                      background: userPrompt.trim() ? 'var(--accent)' : 'var(--bg-elevated)',
-                      color: userPrompt.trim() ? '#0d0f12' : 'var(--text-muted)',
-                      cursor: userPrompt.trim() ? 'pointer' : 'not-allowed',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (userPrompt.trim())
-                        (e.currentTarget as HTMLButtonElement).style.opacity = '0.88';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.opacity = '1';
+                      background: userPrompt.trim() && !loading ? 'var(--accent)' : 'var(--bg-elevated)',
+                      color: userPrompt.trim() && !loading ? '#0d0f12' : 'var(--text-muted)',
+                      cursor: userPrompt.trim() && !loading ? 'pointer' : 'not-allowed',
                     }}
                   >
                     Send <ArrowRight className="w-3.5 h-3.5" />
@@ -383,19 +543,11 @@ export function Builder() {
             </div>
           </aside>
 
-          {/* ── File Explorer ───────────────────────────────── */}
-          <div
-            className="overflow-hidden"
-            style={{ background: 'var(--bg-surface)' }}
-          >
+          <div className="overflow-hidden" style={{ background: 'var(--bg-surface)' }}>
             <FileExplorer files={files} onFileSelect={setSelectedFile} />
           </div>
 
-          {/* ── Code / Preview Panel ────────────────────────── */}
-          <div
-            className="flex flex-col overflow-hidden"
-            style={{ background: 'var(--bg-base)' }}
-          >
+          <div className="flex flex-col overflow-hidden" style={{ background: 'var(--bg-base)' }}>
             <div className="px-4 pt-4 flex-shrink-0">
               <TabView activeTab={activeTab} onTabChange={setActiveTab} />
             </div>
@@ -403,7 +555,7 @@ export function Builder() {
               {activeTab === 'code' ? (
                 <CodeEditor file={selectedFile} />
               ) : webcontainer ? (
-                <PreviewFrame webContainer={webcontainer} />
+                <PreviewFrame webContainer={webcontainer} installStatus={installStatus} />
               ) : (
                 <div
                   className="h-full flex flex-col items-center justify-center gap-3 text-sm fade-up"

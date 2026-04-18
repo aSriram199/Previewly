@@ -155,6 +155,42 @@ export const getSystemPrompt = (cwd: string = WORK_DIR) => `You are Bolt, an exp
   </artifact_instructions>
 </artifact_info>
 
+<code_quality_rules>
+  These rules are NON-NEGOTIABLE. Violating any of them produces low-quality output.
+
+  STRUCTURE
+  - NEVER put all code in a single file. Split into components, hooks, utils, types.
+  - Each file should have ONE clear responsibility.
+  - Maximum ~150 lines per file. Extract when you exceed this.
+
+  TYPESCRIPT
+  - Every component must have an explicitly typed Props interface.
+  - Every useState must have an explicit generic type parameter.
+  - Every function parameter and return value must be typed.
+  - FORBIDDEN: \`any\`, implicit \`any\`, or untyped objects.
+
+  ASYNC / STATE MANAGEMENT
+  - All data-fetching operations must track: isLoading, error, data separately.
+  - Show a loading skeleton or spinner while loading.
+  - Show an error boundary or inline error message on failure.
+  - Allow retry after errors.
+
+  UI / UX
+  - All layouts must be responsive (mobile-first with Tailwind breakpoints).
+  - Use semantic HTML: nav, main, section, article, header, footer.
+  - Every button and input must have an aria-label if its purpose is not obvious from text.
+  - Color contrast must pass WCAG AA (use dark text on light backgrounds and vice versa).
+
+  NAMING
+  - Variables, functions, and components must have descriptive names.
+  - FORBIDDEN: single-letter names (except loop indices), \`data\`, \`info\`, \`temp\`, \`x\`.
+  - Boolean variables should start with \`is\`, \`has\`, or \`can\` (e.g., isLoading, hasError).
+
+  CONTENT
+  - Use realistic, domain-specific placeholder data —not Lorem ipsum or Item 1/2/3.
+  - Use real-looking names, amounts, dates, and descriptions that fit the domain.
+</code_quality_rules>
+
 NEVER use the word "artifact". For example:
   - DO NOT SAY: "This artifact sets up a simple Snake game using HTML, CSS, and JavaScript."
   - INSTEAD SAY: "We set up a simple Snake game using HTML, CSS, and JavaScript."
@@ -286,8 +322,48 @@ Here are some examples of correct usage of artifacts:
   </example>
 </examples>
 `;
-export const BASE_PROMPT =
-  "For all designs I ask you to make, have them be beautiful, not cookie cutter. Make webpages that are fully featured and worthy for production.\n\nBy default, this template supports JSX syntax with Tailwind CSS classes, React hooks, and Lucide React for icons. Do not install other packages for UI themes, icons, etc unless absolutely necessary or I request them.\n\nUse icons from lucide-react for logos.\n\nUse stock photos from unsplash where appropriate, only valid URLs you know exist. Do not download the images, only link to them in image tags.\n\n";
+export const BASE_PROMPT = `For all designs I ask you to make, have them be beautiful, not cookie cutter. Make webpages that are fully featured and worthy for production.
+
+By default, this template supports JSX syntax with Tailwind CSS classes, React hooks, and Lucide React for icons. Do not install other packages for UI themes, icons, etc unless absolutely necessary or I request them.
+
+Use icons from lucide-react for logos.
+
+Use stock photos from unsplash where appropriate, only valid URLs you know exist. Do not download the images, only link to them in image tags.
+
+CODE QUALITY REQUIREMENTS — follow these strictly for every generation:
+
+1. FILE STRUCTURE: Split code into multiple focused files. Never put everything in App.tsx.
+   - Each component gets its own file in src/components/
+   - Custom hooks go in src/hooks/
+   - Type definitions go in src/types.ts
+   - Utility/helper functions go in src/utils/
+   - Constants and config go in src/constants.ts
+   - No single file should exceed ~150 lines.
+
+2. TYPESCRIPT: Use strict TypeScript throughout.
+   - Define interfaces or type aliases for ALL props, state shapes, and API responses.
+   - Never use \`any\`. Use \`unknown\` when the type is genuinely unknown.
+   - Use discriminated unions for state machine types (e.g., loading/error/success).
+
+3. ASYNC STATE: Every async operation must handle three states explicitly.
+   - Loading: show a spinner or skeleton.
+   - Error: show a human-friendly error message with a retry option.
+   - Success: render the actual data.
+
+4. RESPONSIVE DESIGN: All layouts must work on both mobile (320px) and desktop (1280px+).
+   - Use Tailwind responsive prefixes: sm:, md:, lg:.
+   - Stack columns on mobile, side-by-side on desktop.
+
+5. REALISTIC CONTENT: Use realistic placeholder data.
+   - Real-sounding names, real-looking prices, real categories.
+   - No \"Lorem ipsum\", no \"data1\", no \"Item 1\".
+
+6. COMPONENT DESIGN: Keep components small and single-purpose.
+   - Extract repeated JSX into reusable components immediately.
+   - Pass data via props — do not reach into global state unnecessarily.
+
+7. ACCESSIBILITY: Add aria-label, role, and semantic HTML for all interactive elements.
+`;
 
 export const CONTINUE_PROMPT = stripIndents`
   Continue your prior response. IMPORTANT: Immediately begin from where you left off without any interruptions.

@@ -20,8 +20,6 @@ app.use(express.json({ limit: "1mb" }));
 const parsedPort = Number.parseInt(process.env.PORT ?? "3000", 10);
 const port = Number.isNaN(parsedPort) ? 3000 : parsedPort;
 
-// POST /template
-// Uses gpt-4o-mini (cheap/fast) to classify the prompt as 'react' or 'node'.
 app.post("/template", async (req: Request, res: Response) => {
   const { prompt } = req.body;
 
@@ -43,7 +41,7 @@ app.post("/template", async (req: Request, res: Response) => {
           content: prompt.trim(),
         },
       ],
-      model: "gpt-4o-mini", // Cheap classification — no need for gpt-4o here
+      model: "gpt-4o-mini",
       max_tokens: 10,
     });
 
@@ -77,8 +75,6 @@ app.post("/template", async (req: Request, res: Response) => {
   }
 });
 
-// POST /chat
-// Sends messages to gpt-4o. Truncates history to last 20 messages to avoid context overflow.
 app.post("/chat", async (req: Request, res: Response) => {
   const { messages } = req.body;
 
@@ -90,33 +86,52 @@ app.post("/chat", async (req: Request, res: Response) => {
   const MAX_MESSAGES = 20;
 
   try {
-    // Always keep at most MAX_MESSAGES of recent history to prevent context window overflow
     const recentMessages = messages.slice(-MAX_MESSAGES);
     const chatMessages =
       recentMessages[0]?.role === "system"
         ? recentMessages
         : [{ role: "system", content: getSystemPrompt() }, ...recentMessages];
 
-    const response = await openai.chat.completions.create({
-      messages: chatMessages,
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const stream = await openai.chat.completions.create({
+      messages: chatMessages as OpenAI.Chat.ChatCompletionMessageParam[],
       model: "gpt-4o",
       max_tokens: 8000,
+      stream: true,
     });
 
-    const content = response.choices[0].message.content ?? "";
-    res.json({ response: content });
+    let fullContent = "";
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (delta) {
+        fullContent += delta;
+        res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+      }
+    }
+
+    res.write(`data: ${JSON.stringify({ done: true, response: fullContent })}\n\n`);
+    res.end();
   } catch (error) {
     console.error("[POST /chat] Error:", error);
-    res.status(500).json({ message: "Internal server error." });
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Internal server error." });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: "Stream interrupted." })}\n\n`);
+      res.end();
+    }
   }
 });
 
-// 404 catch-all
 app.use((_req: Request, res: Response) => {
   res.status(404).json({ message: "Route not found." });
 });
 
-// Global error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[Server] Unhandled error:", err);
   res.status(500).json({ message: "Internal server error." });
